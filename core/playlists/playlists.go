@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -77,9 +78,11 @@ func InPath(folder model.Folder) bool {
 	if conf.Server.PlaylistsPath == "" {
 		return true
 	}
-	rel, _ := filepath.Rel(folder.LibraryPath, folder.AbsolutePath())
-	for path := range strings.SplitSeq(conf.Server.PlaylistsPath, string(filepath.ListSeparator)) {
-		if match, _ := doublestar.Match(path, rel); match {
+	// doublestar only splits on '/', so match the folder's slash-separated library path, and
+	// let Windows users write the pattern with '\' (on other OSes '\' stays an escape character)
+	rel := path.Join(folder.Path, folder.Name)
+	for pattern := range strings.SplitSeq(conf.Server.PlaylistsPath, string(filepath.ListSeparator)) {
+		if match, _ := doublestar.Match(filepath.ToSlash(pattern), rel); match {
 			return true
 		}
 	}
