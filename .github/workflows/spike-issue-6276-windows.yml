@@ -1,0 +1,96 @@
+# Spike for issue #6276 (smart playlists not imported on Windows with a nested PlaylistsPath).
+# Runs only the issue-6276 specs on a native Windows runner, twice:
+#   baseline: core/playlists/playlists.go restored from the base commit (original InPath). The test
+#             step is expected to FAIL, so this job ends red; the check step proves it failed for
+#             exactly the expected specs, and that the controls still pass.
+#   fix:      the patched InPath. Everything must pass.
+name: "Spike #6276: Windows PlaylistsPath"
+
+on:
+  push:
+    branches:
+      - t3code/spike-issue-6276-windows-playlists
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # master commit the spike branched from; v0.64.2 has the same InPath (checked below)
+  BASE_SHA: 52135913d4747c8f8ddcfd8e7004202b8f53b594
+  RELEASE_TAG: v0.64.2
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.mode }}
+    runs-on: windows-2022
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [baseline, fix]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          update: false
+
+      - name: Add mingw64 to PATH
+        shell: bash
+        run: echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
+
+      - name: Restore original InPath (baseline)
+        if: matrix.mode == 'baseline'
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          inpath() { git show "$1:core/playlists/playlists.go" | awk '/^func InPath/,/^}/'; }
+          echo "--- InPath at $RELEASE_TAG:"; inpath "$RELEASE_TAG"
+          diff <(inpath "$RELEASE_TAG") <(inpath "$BASE_SHA") && echo "InPath is identical in $RELEASE_TAG and $BASE_SHA"
+          git checkout "$BASE_SHA" -- core/playlists/playlists.go
+          echo "--- InPath under test:"; awk '/^func InPath/,/^}/' core/playlists/playlists.go
+          git status --short
+
+      - name: Show InPath under test (fix)
+        if: matrix.mode == 'fix'
+        shell: bash
+        run: awk '/^func InPath/,/^}/' core/playlists/playlists.go
+
+      - name: Build test binaries
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go version
+          go test -count=1 -tags netgo,sqlite_fts5 -run '^$' ./core/playlists/ ./scanner/
+
+      - name: Test (issue-6276 specs)
+        id: test
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        # tests.Init changes to the repo root, so the reports land there. Both packages always run.
+        run: |
+          rc=0
+          for pkg in playlists:./core/playlists/ scanner:./scanner/; do
+            go test -v -count=1 -tags netgo,sqlite_fts5 "${pkg#*:}" -ginkgo.label-filter=issue-6276 \
+              -ginkgo.no-color -ginkgo.json-report="report-${pkg%%:*}.json" || rc=1
+          done
+          exit $rc
+
+      - name: Check per-spec outcome against expectations
+        if: always() && steps.test.outcome != 'skipped'
+        shell: pwsh
+        run: >
+          ./.github/spike-issue-6276/check-report.ps1 -Mode ${{ matrix.mode }}
+          -TestOutcome ${{ steps.test.outcome }}
+          -Reports report-playlists.json, report-scanner.json

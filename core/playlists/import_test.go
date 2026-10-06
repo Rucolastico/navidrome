@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -1139,9 +1140,8 @@ var _ = Describe("Playlists - Import", func() {
 			Expect(playlists.InPath(folder)).To(BeTrue())
 		})
 
-		It("returns true if folder is in PlaylistsPath", func() {
-			tests.SkipOnWindows("path separator bug (#TBD-path-sep-playlists)")
-			conf.Server.PlaylistsPath = "other/**:playlists/**"
+		It("returns true if folder is in PlaylistsPath", Label("issue-6276"), func() {
+			conf.Server.PlaylistsPath = "other/**" + string(filepath.ListSeparator) + "playlists/**"
 			Expect(playlists.InPath(folder)).To(BeTrue())
 		})
 
@@ -1162,6 +1162,30 @@ var _ = Describe("Playlists - Import", func() {
 
 			Expect(playlists.InPath(folder2)).To(BeTrue())
 		})
+
+		// Issue #6276: on Windows, nested folders never matched, so their playlists were not imported.
+		// Folders are built like the scanner does, on a real native library path.
+		DescribeTable("matches nested folders on the native OS", Label("issue-6276"),
+			func(pattern, folderPath string, expected bool) {
+				conf.Server.PlaylistsPath = pattern
+				lib := model.Library{ID: 1, Path: GinkgoT().TempDir()}
+				f := model.NewFolder(lib, folderPath)
+				f.LibraryPath = lib.Path
+				Expect(playlists.InPath(*f)).To(Equal(expected))
+			},
+			Entry("nested folder, exact pattern", "Playlists/navidrome", "Playlists/navidrome", true),
+			Entry("nested folder, ** pattern", "Playlists/**", "Playlists/navidrome/Deep", true),
+			Entry("nested folder, second item of a list", "."+string(filepath.ListSeparator)+"Playlists/navidrome", "Playlists/navidrome", true),
+			Entry("top-level folder", "Playlists", "Playlists", true),
+			Entry("root folder, '.' in a list", "."+string(filepath.ListSeparator)+"Playlists/navidrome", ".", true),
+			Entry("sibling folder is excluded", "Playlists/navidrome", "Playlists/other", false),
+			Entry("child folder is excluded by an exact pattern", "Playlists/navidrome", "Playlists/navidrome/Deep", false),
+			Entry("root folder is excluded by a nested pattern", "Playlists/navidrome", ".", false),
+			// Backslash is a path separator on Windows, but an escape character everywhere else
+			Entry("backslash pattern", `Playlists\navidrome`, "Playlists/navidrome", runtime.GOOS == "windows"),
+			Entry("backslash ** pattern", `Playlists\**`, "Playlists/navidrome/Deep", runtime.GOOS == "windows"),
+			Entry("backslash pattern, sibling folder is excluded", `Playlists\navidrome`, "Playlists/other", false),
+		)
 	})
 })
 
