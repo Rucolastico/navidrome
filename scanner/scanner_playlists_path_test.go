@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/conf/configtest"
@@ -26,7 +27,7 @@ import (
 // Issue #6276: scans a real library folder on the native filesystem, so on Windows the
 // folder paths go through the OS path handling, and checks what reaches the DB in phase 1
 // (folder.num_playlists) and phase 4 (imported playlists).
-var _ = Describe("Scanner - PlaylistsPath on the native filesystem", Ordered, Label("issue-6276"), func() {
+var _ = Describe("Scanner - PlaylistsPath on the native filesystem", Ordered, ContinueOnFailure, Label("issue-6276"), func() {
 	var ctx context.Context
 	var ds model.DataStore
 	var s model.Scanner
@@ -110,8 +111,14 @@ var _ = Describe("Scanner - PlaylistsPath on the native filesystem", Ordered, La
 			_, err := s.ScanAll(ctx, true)
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(foldersWithPlaylists()).To(ConsistOf(expectedFolders), "phase 1: folders stored with num_playlists > 0")
-			Expect(importedPlaylists()).To(ConsistOf(expectedPlaylists), "phase 4: imported playlists")
+			// One assertion, so a failure shows both the phase 1 and the phase 4 results
+			Expect(map[string][]string{
+				"phase 1: folders stored with num_playlists > 0": sorted(foldersWithPlaylists()),
+				"phase 4: imported playlists":                    sorted(importedPlaylists()),
+			}).To(Equal(map[string][]string{
+				"phase 1: folders stored with num_playlists > 0": sorted(expectedFolders),
+				"phase 4: imported playlists":                    sorted(expectedPlaylists),
+			}))
 		},
 		Entry("empty (default) imports everything", "",
 			[]string{".", "Playlists/navidrome", "Playlists/navidrome/Deep", "Playlists/other"},
@@ -131,6 +138,10 @@ var _ = Describe("Scanner - PlaylistsPath on the native filesystem", Ordered, La
 			onWindows([]string{"Rock"})),
 	)
 })
+
+func sorted(values []string) []string {
+	return slices.Sorted(slices.Values(values))
+}
 
 // onWindows returns values when running on Windows, and an empty slice everywhere else.
 func onWindows(values []string) []string {
